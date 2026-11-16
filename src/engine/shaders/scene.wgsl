@@ -30,7 +30,7 @@ struct FOut { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };
 // ---------------- geometry ----------------
 fn sdf2(p: vec2f) -> f32 {
   let hw = F.textParams.xy;
-  let uv = vec2f(p.x / hw.x * 0.5 + 0.5, 0.5 - p.y / hw.y * 0.5);
+  let uv = p / hw * 0.5 + 0.5; // SDF texture row 0 = bottom (world Y up), per B2 contract
   let d = textureSampleLevel(sdfTex, samp, clamp(uv, vec2f(0.0), vec2f(1.0)), 0.0).r;
   let o = length(max(abs(p) - hw, vec2f(0.0)));
   return select(d, max(d, 0.0) + o, o > 0.0);
