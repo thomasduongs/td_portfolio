@@ -32,10 +32,10 @@ fn visibility(p: vec3f, light: vec3f) -> f32 {
   for (var i = 0u; i < u32(F.quality.w); i++) {
     if (t > end) { break; }
     let d = textSDF(p + rd*t);
-    if (d < 0.002) { return 0.0; }
+    if (d < 0.002) { return 0.38; } // glass transmits part of the light
     shadow = min(shadow, 10.0*d/t); t += max(d,0.02);
   }
-  return clamp(shadow,0.0,1.0);
+  return mix(0.38, 1.0, clamp(shadow, 0.0, 1.0));
 }
 fn hg(cosTheta: f32, g: f32) -> f32 {
   return (1.0-g*g) / (4.0*PI*pow(max(0.001,1.0+g*g-2.0*g*cosTheta),1.5));

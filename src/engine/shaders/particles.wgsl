@@ -32,10 +32,10 @@ fn visibility(p: vec3f, l: vec3f) -> f32 {
   for (var i = 0u; i < u32(F.quality.w); i++) {
     if (t > end) { break; }
     let d = textSDF(p + rd * t);
-    if (d < 0.002) { return 0.0; }
+    if (d < 0.002) { return 0.38; } // glass transmits part of the light
     shadow = min(shadow, 12.0 * d / t); t += max(d, 0.015);
   }
-  return clamp(shadow, 0.0, 1.0);
+  return mix(0.38, 1.0, clamp(shadow, 0.0, 1.0));
 }
 fn hg(cosTheta: f32, g: f32) -> f32 {
   return (1.0 - g*g) / (4.0 * PI * pow(max(0.001, 1.0 + g*g - 2.0*g*cosTheta), 1.5));
@@ -85,6 +85,12 @@ fn update(@builtin(global_invocation_id) id: vec3u) {
   let cone = smoothstep(F.spotPos.w, F.spotDir.w, dot(-l, F.spotDir.xyz));
   let incident = dot(F.spotColor.rgb, vec3f(0.2126, 0.7152, 0.0722)) * cone / dist2 * hg(dot(-l, view), 0.5) * visibility(point, F.spotPos.xyz);
   let pointerLight = F.pointer.w * 0.3 / max(0.1, dot(point - F.pointer.xyz, point - F.pointer.xyz));
-  radiance[i] = min(30.0, incident + pointerLight);
+  // Soft volume borders + age fade: the spawn box and respawns never read as hard edges or pops.
+  let bx = 1.0 - smoothstep(F.textParams.x - 0.2, F.textParams.x + 1.0, abs(point.x));
+  let by = 1.0 - smoothstep(2.0, 3.5, point.y - F.spotColor.w);
+  let bz = 1.0 - smoothstep(1.8, 3.0, abs(point.z));
+  let age = p.w + dt;
+  let life = smoothstep(0.0, 1.5, age) * (1.0 - smoothstep(v.w - 1.5, v.w, age));
+  radiance[i] = min(30.0, incident + pointerLight) * bx * by * bz * life;
 }
 
