@@ -24,8 +24,11 @@ fn corner(vi: u32) -> vec2f {
 
 fn pulseBoost(s: f32) -> f32 {
   if (F.misc.w < 0.0) { return 1.0; }
-  let x = (s - F.misc.w) / 0.25;
-  return 1.0 + 5.0 * exp(-x * x);
+  // bright head with a short comet tail behind it (the pulse reads as motion even in a single frame)
+  let d = F.misc.w - s;
+  let head = exp(-(d / 0.35) * (d / 0.35));
+  let tail = select(0.0, exp(-d / 1.6), d > 0.0);
+  return 1.0 + 6.0 * head + 2.5 * tail;
 }
 
 // ---------------------------------------------------------------- beams

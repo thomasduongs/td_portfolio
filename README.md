@@ -1,11 +1,12 @@
 # Thomas Duong — portfolio
 
-The name is made of light. Three coloured projector beams (red, green, blue) shine through drifting
-haze. Each one carries the name's silhouette as a stencil, so on its own each beam is just long
-letter-shaped rays. The haze glows where beams overlap, and **THOMAS DUONG** appears only where all
-three cross. The lamps orbit slowly, so the rays swing around while the name holds. Move the pointer
-fast and the beams knock out of alignment, splitting the name into fragments that re-form. Click to drop
-chrome marbles (Rapier physics); they fall through the light and cut shadow shafts through the letters.
+The name is drawn by crisp laser beams. Two white lasers enter from the page edges, bend through glass
+prisms (with a thin rainbow from dispersion), and bounce off routing mirrors into the letters. A tiny
+mirror at every corner of each letter outline reflects the beam exactly onto the next edge, so each
+glyph is a closed loop of real reflections. Each word's beam finally passes through a tilted glass
+block and leaves the frame. All of it is computed exactly (reflection and Snell's law) on the CPU.
+On load the lasers trace the name letter by letter. Click to send a pulse of light through the
+whole system, and move the pointer for parallax.
 
 ```bash
 npm install
@@ -19,12 +20,11 @@ URL flags: `?bench` (HUD: fps, per-pass GPU ms, p50/95/99, dropped frames, input
 
 ## Architecture
 
-- **Render worker** (`src/engine/worker.ts` → `host.ts`): WebGPU on an `OffscreenCanvas`, isolated from the DOM; main-thread host when OffscreenCanvas is unavailable.
-- **Passes** (one command buffer per frame): particles (compute, lit by the beams) → scene (per-pixel beam march: coarse haze scatter + fine letter-slab excitation, projected floor, marbles) → TAA upsample → bloom → composite (AgX, grain).
-- **Beams** (`shaders/beams.wgsl`): gobo projection through the plane z = 0, cone, inverse-square, marble occlusion, and a two-step excitation term `k2·pairs + k3·R·G·B` that forms the letters. The text is a 2D SDF baked on the GPU with jump flooding; there is no letter geometry.
-- **Adaptive quality** (`quality.ts`): 5 presets driven by GPU timestamp queries and the measured refresh rate (internal resolution, step counts, froxel grid, particle count).
-- **Physics**: Rapier (Rust→WASM), fixed 120 Hz with interpolation, CCD on the marbles. It's lazy-loaded so the ~2 MB WASM doesn't delay the first frame.
-- **Fallbacks**: single-pass WebGL2 renderer, then a pure-CSS title.
+- **Render worker** (`src/engine/worker.ts` → `host.ts`): WebGPU on an `OffscreenCanvas`, isolated from the DOM.
+- **Optics** (`src/engine/optics/`): `contours.ts` traces glyph outlines from the rasterized text (marching squares + Douglas–Peucker); `route.ts` solves the installation (prism yaw and router positions are searched so every hop stays tidy and in frame).
+- **Passes** (one command buffer, all at output resolution): lasers (anti-aliased beam quads, mirror chips, glints, floor reflection) → glass (analytic prism/box with screen-space refraction and dispersion) → bloom → composite (AgX).
+- **Adaptive quality** (`quality.ts`): bloom depth, floor reflection, glow width, glass dispersion, driven by GPU timestamps.
+- **Fallbacks**: WebGL2 renderer with the same optics scene, then a pure-CSS title.
 
 Design decisions and the module contracts are in [`ENGINE_SPEC.md`](ENGINE_SPEC.md). Validate shaders with
 `scripts/check-wgsl.sh` (needs `cargo install naga-cli`).
