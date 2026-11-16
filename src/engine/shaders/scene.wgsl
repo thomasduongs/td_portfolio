@@ -112,7 +112,7 @@ fn env(ro: vec3f, rd: vec3f, direct: bool) -> vec3f {
   let toL = F.spotPos.xyz - ro;
   let cosA = max(dot(rd, normalize(toL)), 0.0);
   let core = select(0.0, 0.55, sphereHit(ro, rd, vec4f(F.spotPos.xyz, 0.2)) < NO_HIT);
-  c += F.spotColor.rgb * (core + 0.0035 * pow(cosA, 600.0) + 0.0004 * pow(cosA, 40.0));
+  c += F.spotColor.rgb * (core + 0.0035 * pow(cosA, 600.0)); // wide glow comes from froxel fog + bloom
   if (direct) { return c; }
   // overhead softbox
   if (rd.y > 0.0) {
@@ -124,12 +124,25 @@ fn env(ro: vec3f, rd: vec3f, direct: bool) -> vec3f {
     let q = ro + rd * ((-3.5 - ro.z) / rd.z);
     let fy = F.spotColor.w;
     let bars = rectMask(vec2f(abs(q.x) - 3.8, q.y - fy - 1.6), vec2f(0.12, 1.6), 0.1);
-    c += vec3f(0.55, 0.72, 1.0) * 4.0 * bars;
+    c += vec3f(0.55, 0.72, 1.0) * 2.0 * bars;
   }
   // front horizontal strip behind the camera: draws a sheen line across glass faces
   if (rd.z > 0.0) {
     let q = ro + rd * ((14.0 - ro.z) / rd.z);
     c += vec3f(1.0, 0.98, 0.95) * 1.1 * rectMask(q.xy - vec2f(0.0, 2.2), vec2f(9.0, 0.35), 0.3);
+  }
+  // Dim backdrop far behind the text (secondary rays only): gives refraction a gradient to bend,
+  // so the glyphs read as lit glass on a pure-black page.
+  if (rd.z < 0.0) {
+    let q = ro + rd * ((-9.0 - ro.z) / rd.z);
+    let g = rectMask(q.xy - vec2f(0.0, 1.0), vec2f(13.0, 4.5), 4.0);
+    let hue = mix(vec3f(0.35, 0.45, 0.7), vec3f(1.0, 0.85, 0.7), smoothstep(-3.0, 5.0, q.y));
+    c += hue * 0.45 * g;
+  }
+  // Large soft panel far in front (behind the camera): gentle sheen on front faces + bevels.
+  if (rd.z > 0.0) {
+    let q = ro + rd * ((30.0 - ro.z) / rd.z);
+    c += vec3f(0.9, 0.93, 1.0) * 0.5 * rectMask(q.xy - vec2f(0.0, 3.0), vec2f(18.0, 7.0), 6.0) * smoothstep(-4.0, 10.0, q.y);
   }
   c += vec3f(0.006, 0.007, 0.009) * (0.6 + 0.4 * rd.y);
   return c;
@@ -195,7 +208,7 @@ fn floorDirect(p: vec3f, v: vec3f) -> vec3f {
   return c;
 }
 
-fn floorFade(p: vec3f) -> f32 { return exp(-max(length(p.xz) - 5.0, 0.0) * 0.35); }
+fn floorFade(p: vec3f) -> f32 { return exp(-max(length(p.xz) - 4.0, 0.0) * 0.3); }
 
 fn chromeColor(p: vec3f, n: vec3f, rd: vec3f, refl: vec3f) -> vec3f {
   let v = -rd;
@@ -275,7 +288,7 @@ fn shadeGlass(p: vec3f, n: vec3f, rd: vec3f) -> vec3f {
     var oR = refract(r1, -nx, IOR_RGB.x); oR = select(oR, outG, dot(oR, oR) < 0.5);
     var oB = refract(r1, -nx, IOR_RGB.z); oB = select(oB, outG, dot(oB, oB) < 0.5);
     let eG = env(xo, outG, false);
-    trans = max(base + vec3f(env(xo, oR, false).r, eG.g, env(xo, oB, false).b) - eG, vec3f(0.0));
+    trans = max(base + 0.35 * (vec3f(env(xo, oR, false).r, eG.g, env(xo, oB, false).b) - eG), vec3f(0.0));
   }
   trans *= exp(-ABSORB * (t + 0.05));
 
@@ -292,7 +305,7 @@ fn shadeGlass(p: vec3f, n: vec3f, rd: vec3f) -> vec3f {
   let span = F.textParams.x + 2.0;
   let sweep = (fract(F.time.x * 0.06) * 2.0 - 1.0) * span;
   let band = exp(-pow((p.x - sweep) / 0.45, 2.0));
-  c += vec3f(1.0, 0.92, 0.8) * edge * band * 1.8 * (0.35 + 0.65 * max(n.z, 0.0));
+  c += vec3f(1.0, 0.92, 0.8) * edge * (band * 3.0 + 0.06) * (0.35 + 0.65 * max(n.z, 0.0));
   return c;
 }
 
@@ -312,6 +325,7 @@ fn shadeGlass(p: vec3f, n: vec3f, rd: vec3f) -> vec3f {
 
   var col: vec3f;
   let p = ro + rd * t;
+  var tDepth = t;
   switch kind {
     case 1u: {
       let v = -rd;
@@ -325,7 +339,9 @@ fn shadeGlass(p: vec3f, n: vec3f, rd: vec3f) -> vec3f {
       if (rs > 0u) { refl = traceSecondary(p + vec3f(0.0, 0.002, 0.0), rr, rs); }
       else { refl = env(p, rr, false) * 0.5; }
       c += refl * fresnel(v.y, 0.05);
-      col = c * floorFade(p);
+      let fade = floorFade(p);
+      col = c * fade;
+      tDepth = mix(F.froxel.w, t, fade); // fog sees a continuous distance into the haze
     }
     case 2u: {
       let n = normalize(p - F.marbles[u32(m.y)].xyz);
@@ -342,7 +358,7 @@ fn shadeGlass(p: vec3f, n: vec3f, rd: vec3f) -> vec3f {
   if (kind == 0u) {
     o.depth = 1.0;
   } else {
-    let c = F.viewProj * vec4f(p, 1.0);
+    let c = F.viewProj * vec4f(ro + rd * tDepth, 1.0);
     o.depth = clamp(c.z / c.w, 0.0, 1.0);
   }
   return o;

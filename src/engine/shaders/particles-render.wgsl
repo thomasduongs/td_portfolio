@@ -13,5 +13,5 @@ fn vs(@builtin(vertex_index) vertex: u32, @builtin(instance_index) instance: u32
 @fragment
 fn fs(in: VertexOut) -> @location(0) vec4f {
   let radius2 = dot(in.local, in.local); if (radius2 > 1.0) { discard; }
-  return vec4f(vec3f(1.0,0.95,0.9) * exp(-radius2 * 4.0) * in.light * 0.6, 0.0);
+  return vec4f(vec3f(1.0,0.95,0.9) * exp(-radius2 * 4.0) * in.light * 0.22, 0.0);
 }
