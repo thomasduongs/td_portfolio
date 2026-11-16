@@ -1,5 +1,5 @@
 import type { EngineCtx, FrameTargets, Pass, QualitySettings, Size, TS } from '../types';
-import { FRAME_WGSL } from '../frame';
+import { FRAME_WGSL, BEAMS_WGSL } from '../frame';
 import { QualityController } from '../quality';
 import SOURCE from '../shaders/particles.wgsl?raw';
 import DRAW_SOURCE from '../shaders/particles-render.wgsl?raw';
@@ -28,7 +28,7 @@ export class ParticlePass implements Pass {
     const storage = (label: string, size: number) => device.createBuffer({ label, size, usage: GPUBufferUsage.STORAGE });
     this.pos = storage('Particle positions', QualityController.MAX_PARTICLES * 16);
     this.vel = storage('Particle velocities', QualityController.MAX_PARTICLES * 16);
-    this.light = storage('Particle radiance', QualityController.MAX_PARTICLES * 4);
+    this.light = storage('Particle radiance', QualityController.MAX_PARTICLES * 16);
     this.params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.indirect = device.createBuffer({ size: 12, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
     this.drawIndirect = device.createBuffer({ size: 16, usage: GPUBufferUsage.INDIRECT | GPUBufferUsage.COPY_DST });
@@ -43,7 +43,7 @@ export class ParticlePass implements Pass {
       { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
     ] });
     // Separate modules give the vertex stage read-only declarations for shared buffers.
-    const computeModule = device.createShaderModule({ code: FRAME_WGSL + SOURCE });
+    const computeModule = device.createShaderModule({ code: FRAME_WGSL + BEAMS_WGSL + SOURCE });
     const drawModule = device.createShaderModule({ code: FRAME_WGSL + DRAW_SOURCE });
     const computeLayout = device.createPipelineLayout({ bindGroupLayouts: [frameBGL, this.computeBGL] });
     const [initialize, update, draw] = await Promise.all([

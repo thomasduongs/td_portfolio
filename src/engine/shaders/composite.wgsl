@@ -1,11 +1,7 @@
-// Composite: froxel fog at pixel depth, bloom mix, exposure, AgX tonemap, vignette, grain+dither, OETF.
+// Composite: bloom mix, exposure, AgX tonemap, vignette, grain+dither, OETF. Fog lives in the scene colour (v2).
 @group(1) @binding(0) var hdrTex: texture_2d<f32>;
 @group(1) @binding(1) var bloomTex: texture_2d<f32>;
-@group(1) @binding(2) var depthTex: texture_depth_2d;
-@group(1) @binding(3) var fogTex: texture_3d<f32>;
-@group(1) @binding(4) var samp: sampler;
-
-const FOG_NEAR: f32 = 0.3;
+@group(1) @binding(2) var samp: sampler;
 
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
   let p = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
@@ -44,21 +40,6 @@ fn oetf(c: vec3f) -> vec3f {
 fn shade(pos: vec2f, toSrgb: bool) -> vec4f {
   let uv = pos * F.outRes.zw;
   var color = textureSampleLevel(hdrTex, samp, uv, 0.0).rgb;
-
-  // Distance along the view ray from the internal-res depth.
-  let dims = vec2i(textureDimensions(depthTex));
-  let ip = clamp(vec2i(uv * F.resolution.xy), vec2i(0), dims - vec2i(1));
-  let z = textureLoad(depthTex, ip, 0);
-  let far = F.froxel.w;
-  var d = far;
-  if (z < 1.0) {
-    let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    let w = F.invViewProj * vec4f(ndc, z, 1.0);
-    d = min(length(w.xyz / w.w - F.camPos.xyz), far);
-  }
-  let sz = clamp(log(max(d, FOG_NEAR) / FOG_NEAR) / log(far / FOG_NEAR), 0.0, 1.0);
-  let fog = textureSampleLevel(fogTex, samp, vec3f(uv, sz), 0.0);
-  color = color * fog.a + fog.rgb;
 
   let bloom = textureSampleLevel(bloomTex, samp, uv, 0.0).rgb;
   color = mix(color, bloom, F.misc.y);

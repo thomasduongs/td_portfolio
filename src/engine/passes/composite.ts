@@ -1,4 +1,4 @@
-// Composite: TAA output + bloom + froxel fog -> AgX -> swapchain. host calls setOutput(view) each frame.
+// Composite: TAA output + bloom -> exposure -> AgX -> swapchain. host calls setOutput(view) each frame.
 import type { EngineCtx, FrameTargets, Pass, QualitySettings, Size, TS } from '../types';
 import { FRAME_WGSL } from '../frame';
 import { bloomDesc } from './bloom';
@@ -17,9 +17,7 @@ export class CompositePass implements Pass {
       entries: [
         { binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
         { binding: 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float' } },
-        { binding: 2, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'depth' } },
-        { binding: 3, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: 'float', viewDimension: '3d' } },
-        { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
+        { binding: 2, visibility: GPUShaderStage.FRAGMENT, sampler: { type: 'filtering' } },
       ],
     });
   }
@@ -47,17 +45,13 @@ export class CompositePass implements Pass {
     // Same descriptor as BloomPass -> same pooled texture regardless of configure order.
     const bloom = pool.texture('bloom', bloomDesc(size, q, caps));
     const bloomView = bloom.createView({ baseMipLevel: 0, mipLevelCount: 1 });
-    const depthView = t.sceneDepth.createView({ aspect: 'depth-only' });
-    const fogView = t.froxelIntegrated.createView({ dimension: '3d' });
     this.bgs = [0, 1].map((p) => device.createBindGroup({
       label: 'composite-bg' + p,
       layout: this.bgl,
       entries: [
         { binding: 0, resource: t.taa[p].createView() },
         { binding: 1, resource: bloomView },
-        { binding: 2, resource: depthView },
-        { binding: 3, resource: fogView },
-        { binding: 4, resource: linearClamp },
+        { binding: 2, resource: linearClamp },
       ],
     }));
   }
