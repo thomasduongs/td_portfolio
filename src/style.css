@@ -1,0 +1,111 @@
+/* Black stage. The engine canvas fades in on `body.ready`; the title doubles as the loader and the no-GPU fallback. */
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #000;
+  color: #e8e8e8;
+  overflow: hidden;
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+#gfx {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+  opacity: 0;
+  transition: opacity 1.2s ease;
+  touch-action: none;
+}
+body.ready #gfx { opacity: 1; }
+
+#content {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.title {
+  margin: 0;
+  font-weight: 800;
+  font-size: clamp(2.2rem, 9vw, 8rem);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  color: transparent;
+  background: linear-gradient(100deg, #4a4a4a 0%, #4a4a4a 40%, #ffffff 50%, #4a4a4a 60%, #4a4a4a 100%);
+  background-size: 250% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  filter: drop-shadow(0 0 24px rgba(255, 255, 255, 0.18));
+  animation: sweep 3.2s linear infinite;
+}
+
+/* Once the GPU engine is running the title is only for screen readers. */
+body.ready .title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@keyframes sweep {
+  from { background-position: 150% 0; }
+  to { background-position: -50% 0; }
+}
+
+.hint {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 2.5rem;
+  margin: 0;
+  text-align: center;
+  font-size: 0.7rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: #8a8a8a;
+  opacity: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+body.ready .hint {
+  opacity: 1;
+  animation: hint-out 1s 4s forwards;
+}
+body.nogpu .hint { display: none; }
+
+@keyframes hint-out {
+  to { opacity: 0; }
+}
+
+/* No-GPU fallback: title stays large and centered, the sweep is the only motion. */
+body.nogpu .title { font-size: clamp(2.6rem, 11vw, 10rem); }
+
+/* ?bench HUD */
+#hud {
+  position: fixed;
+  top: 0.75rem;
+  left: 0.75rem;
+  z-index: 2;
+  padding: 0.6rem 0.75rem;
+  background: rgba(0, 0, 0, 0.7);
+  border: 1px solid #333;
+  font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: #bdbdbd;
+  pointer-events: auto;
+}
+#hud .hud-stats { margin: 0; white-space: pre; }
+#hud .hud-report { margin-top: 0.5rem; }
+#hud .hud-report a { color: #e8e8e8; }
