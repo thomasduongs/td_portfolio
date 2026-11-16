@@ -1,3 +1,40 @@
+# v2 — Light-beam text (SUPERSEDES the glass-letter design below where they conflict)
+
+The name is **not geometry**. Three coloured gobo projectors (R, G, B) shine through haze; each beam
+carries the text silhouette as seen through the plane z = 0 (`beams.wgsl::gobo`). Alone, a beam is a
+long letter-shaped streak. The haze is a two-step excitation medium: linear scatter per beam + glow
+∝ `k2·(pairs) + k3·(R·G·B)`. The three silhouettes coincide only on z = 0 → the triple term is the
+letters, formed purely by intersecting light. Lamps orbit (streaks swing, letters hold); pointer
+agitation and the intro misalign the gobos (`align.xyz`) so the letters split into RGB ghosts and re-form.
+Marbles (Rapier) fall **through** the light (no letter colliders) and cut shadow shafts in the beams.
+
+Contracts (lead-owned, done): `shaders/frame.wgsl` (v2 layout, 800 B, `Beam` struct, `hg()` now shared),
+`shaders/beams.wgsl` (beam library), `frame.ts` (`O`, `BEAMS_WGSL`, `BEAM_STRIDE`), `types.ts`
+(`QualitySettings` v2, `EngineCtx.noiseView`, no froxel target), `host.ts` (rig + uniforms).
+The froxel pass is deleted: beams are marched per pixel in the scene pass (letters need per-pixel detail).
+
+## v2 tasks
+- **noise.ts + shaders/noise.wgsl** — `export async function bakeNoise(device: GPUDevice): Promise<GPUTexture>`:
+  64³ `rgba8unorm` 3D texture (usage STORAGE_BINDING | TEXTURE_BINDING), one compute pass (workgroup 4×4×4),
+  **tileable** (period 64) gradient-noise fBm: r = 4-octave fBm, g = 2-octave, b = worley-ish (1 − F1),
+  a = 1. Values remapped to [0,1]. Standalone WGSL (no frame.wgsl needed; must still pass check-wgsl.sh,
+  which prepends frame.wgsl — so don't redeclare `F`, `PI`, `ign`, `hg`, `rayDir`). Await onSubmittedWorkDone.
+- **quality.ts** presets (fields per `QualitySettings` v2):
+
+  | L | scale | hazeSteps | letterSteps | reflSteps | particles | bloomMips |
+  |---|---|---|---|---|---|---|
+  | 0 | 0.50 | 16 | 16 | 0 | 8192 | 4 |
+  | 1 | 0.60 | 20 | 20 | 8 | 16384 | 5 |
+  | 2 | 0.70 | 24 | 28 | 10 | 32768 | 5 |
+  | 3 | 0.80 | 32 | 36 | 12 | 65536 | 6 |
+  | 4 | 1.00 | 40 | 48 | 16 | 131072 | 6 |
+  taa true everywhere. Controller logic unchanged. Fix bench.ts if it referenced removed fields.
+- **composite** — remove the froxel fog apply and its binding (fog is now inside the scene colour). Keep bloom, exposure, AgX, vignette, grain.
+- **physics.ts** — no letter colliders (text is light): `rebuildText` keeps only ground + walls (walls use glyphHalfW). Marbles spawn above the pointer x, fall through the beams.
+- **particles** — compile `FRAME_WGSL + BEAMS_WGSL + src`; declare `sdfTex`/`samp` (rename yours), delete local `hg`/`sdf2`-like duplicates. Radiance becomes **rgb** (`array<vec4f>`): `b = beams(point, view)`; `rgb = b.scatter * 0.35 + EXCITE_COLOR * b.excite * 0.08 + pointer light`. Motes inside the letters glow white. Particle SDF collision removed (letters are not solid). Spawn box: x ±(halfW+1), y [floorY, floorY+3.5], z ±3 (keep soft edges + age fade). Render shader uses rgb.
+- **scene (lead)** — per-pixel beam march: coarse haze march over the whole ray (scatter, 3D-noise density, Beer–Lambert), fine march inside the letter slab |z| < beamParams.z (excitation = letters), floor lit by the projections (stretched coloured letters) + glossy reflection of the slab, chrome marbles, lamp emitters. Writes the text-plane depth where letters glow (TAA reprojection).
+- **fallback/webgl2.ts** — port the v2 scene (same rig maths as host.ts `writeBeams`/`RIG`, fixed steps 16/20/0, no marbles, no 3D noise: use cheap 3D value noise in-shader or none).
+
 # Prism engine — implementation spec
 
 Portfolio landing page: the words **THOMAS DUONG** as extruded, beveled **glass** standing on a black

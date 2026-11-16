@@ -1,28 +1,34 @@
-// Shared per-frame uniforms. Prepended (string concat) to every WGSL module by the TS side:
+// Shared per-frame uniforms (v2: light-beam text). Prepended to every WGSL module by the TS side:
 //   device.createShaderModule({ code: FRAME_WGSL + passSource })
-// Bind as @group(0) @binding(0) in EVERY pipeline (one bind group 0 for all passes -> no rebinding cost).
-// Byte layout mirrored exactly in frame.ts (FRAME_UBO_SIZE = 656).
+// Bind as @group(0) @binding(0) in EVERY pipeline. Byte layout mirrored exactly in frame.ts (FRAME_UBO_SIZE = 800).
 const MAX_MARBLES: u32 = 16u;
+const NUM_BEAMS: u32 = 3u;
+
+// One gobo projector. The beam carries the text silhouette as seen through the plane z = 0.
+struct Beam {
+  pos:   vec4f, // xyz = lamp world position, w = cos(outer cone half-angle)
+  dir:   vec4f, // xyz = normalized beam axis, w = cos(inner cone half-angle)
+  color: vec4f, // rgb = scatter radiance scale, w = gobo leak (light passing outside the letters, 0..1)
+  align: vec4f, // xyz = misalignment offset (world) applied to the gobo lookup, w = d0^2 (lamp->origin dist^2, normalizes intensity to ~1 at the text)
+};
 
 struct Frame {
-  viewProj:     mat4x4f, //   0 jittered view-projection (scene pass)
+  viewProj:     mat4x4f, //   0 jittered view-projection
   invViewProj:  mat4x4f, //  64 inverse of jittered viewProj (ray generation)
-  prevViewProj: mat4x4f, // 128 previous frame UNjittered viewProj (TAA + froxel reprojection)
+  prevViewProj: mat4x4f, // 128 previous frame UNjittered viewProj (TAA reprojection)
   camPos:       vec4f,   // 192 xyz camera world pos, w = tan(fovY/2)
   resolution:   vec4f,   // 208 internal W, H, 1/W, 1/H
   outRes:       vec4f,   // 224 output W, H, 1/W, 1/H
   jitter:       vec4f,   // 240 xy = current jitter in NDC, zw = previous jitter in NDC
   time:         vec4f,   // 256 x = seconds, y = dt, z = frame index, w = quality level
-  pointer:      vec4f,   // 272 xyz = pointer light world pos, w = intensity (0 when idle)
-  spotPos:      vec4f,   // 288 xyz = key spot light pos, w = cos(outer cone angle)
-  spotDir:      vec4f,   // 304 xyz = normalized spot direction, w = cos(inner cone angle)
-  spotColor:    vec4f,   // 320 rgb = radiance * intensity, w = floor plane world Y (glyphs stand on it)
-  textParams:   vec4f,   // 336 x = half width, y = half height (world), z = half depth (extrusion), w = bevel radius
-  quality:      vec4f,   // 352 primarySteps, interiorSteps, reflSteps, shadowSteps (as f32)
-  froxel:       vec4f,   // 368 gridX, gridY, gridZ, far distance (world units along ray)
-  misc:         vec4f,   // 384 x = exposure, y = bloom strength, z = fog density, w = marble count
-  marbles: array<vec4f, 16>, // 400 xyz = center, w = radius (first misc.w are valid)
-}; // total 656 bytes
+  pointer:      vec4f,   // 272 xyz = pointer light world pos, w = intensity
+  textParams:   vec4f,   // 288 x = SDF texture half width, y = half height (world), z = floor Y, w = letter mask softness (world)
+  quality:      vec4f,   // 304 x = coarse haze steps, y = fine (letter slab) steps, z = floor-reflection steps, w = far distance
+  misc:         vec4f,   // 320 x = exposure, y = bloom strength, z = haze density (sigma), w = marble count
+  beamParams:   vec4f,   // 336 x = pair excitation gain k2, y = triple excitation gain k3, z = letter slab half thickness, w = lamp emitter radius
+  beams: array<Beam, 3>, // 352 (64 B each)
+  marbles: array<vec4f, 16>, // 544 xyz = center, w = radius (first misc.w valid)
+}; // total 800 bytes
 
 @group(0) @binding(0) var<uniform> F: Frame;
 
@@ -39,4 +45,8 @@ fn rayDir(uv: vec2f) -> vec3f {
   let ndc = vec2f(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
   let w = F.invViewProj * vec4f(ndc, 1.0, 1.0);
   return normalize(w.xyz / w.w - F.camPos.xyz);
+}
+
+fn hg(cosT: f32, g: f32) -> f32 {
+  return (1.0 - g * g) / (4.0 * PI * pow(max(1e-3, 1.0 + g * g - 2.0 * g * cosT), 1.5));
 }

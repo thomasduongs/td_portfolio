@@ -22,12 +22,9 @@ export type DeviceTier = 'desktop' | 'laptop' | 'mobile';
 export interface QualitySettings {
   level: number;
   renderScale: number;      // internal scene resolution / output resolution
-  primarySteps: number;     // scene raymarch steps
-  interiorSteps: number;    // glass interior march steps
-  reflSteps: number;        // floor reflection march steps
-  shadowSteps: number;      // SDF soft-shadow steps (scene, froxels, particles)
-  dispersion: boolean;      // 3-channel refraction (true) or 1 march + offsets (false)
-  froxel: [number, number, number]; // grid dims x,y,z
+  hazeSteps: number;        // coarse haze/beam march steps along the whole view ray
+  letterSteps: number;      // fine march steps inside the letter slab (where beams intersect)
+  reflSteps: number;        // floor reflection steps through the letter slab (0 = off)
   particles: number;        // active particle count (multiple of 256)
   bloomMips: number;        // 4..6
   taa: boolean;
@@ -44,7 +41,6 @@ export interface FrameTargets {
   sceneColor: GPUTexture;   // hdrFormat, internal size. Written: ScenePass (clear), ParticlePass (load, additive)
   sceneDepth: GPUTexture;   // depth32float, internal size. Written: ScenePass (frag_depth), read: Particles(test), Composite(fog)
   taa: [GPUTexture, GPUTexture]; // hdrFormat, output size. Frame n: TAA writes taa[n&1], reads history taa[(n+1)&1]; Bloom+Composite read taa[n&1]
-  froxelIntegrated: GPUTexture; // rgba16float 3D: rgb=in-scatter accumulated, a=transmittance. Written: VolumetricPass
 }
 
 /** Context every pass receives in its constructor. */
@@ -55,6 +51,7 @@ export interface EngineCtx {
   frameBGL: GPUBindGroupLayout;// @group(0) layout shared by ALL pipelines (explicit pipeline layouts: [frameBGL, passBGL...])
   frameBG: GPUBindGroup;       // set once per pass encoder at group 0
   sdfView: GPUTextureView;     // rgba16float 2D text SDF, .r = signed distance in WORLD units (negative inside)
+  noiseView: GPUTextureView;   // rgba8unorm 3D 64^3 tileable fbm noise (haze density), sample with a REPEAT sampler
   linearClamp: GPUSampler;
   pool: ResourcePoolLike;
 }
@@ -79,7 +76,7 @@ export interface Pass {
 
 // ---------- worker <-> main thread messages ----------
 export type MainToWorker =
-  | { type: 'init'; canvas: OffscreenCanvas | HTMLCanvasElement; width: number; height: number; dpr: number; tier: DeviceTier; bench: string | null; reducedMotion: boolean; forceWebGL2?: boolean }
+  | { type: 'init'; canvas: OffscreenCanvas | HTMLCanvasElement; width: number; height: number; dpr: number; tier: DeviceTier; bench: string | null; reducedMotion: boolean; forceWebGL2?: boolean; forceLevel?: number }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'pointer'; x: number; y: number; down: boolean; click: boolean; t: number } // x,y in [0,1] top-left origin; t = performance.timeOrigin + event.timeStamp
   | { type: 'visibility'; hidden: boolean };
