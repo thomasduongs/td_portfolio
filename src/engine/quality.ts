@@ -3,22 +3,19 @@ import type { DeviceTier, QualitySettings } from './types';
 
 type Preset = Omit<QualitySettings, 'level'>;
 
-// Index = level. Tuned after measurement: the letter hull is ~0.07 thick inside a ±0.15 slab, so few fine steps suffice. taa everywhere.
+// Index = level. v3 laser-optics presets from ENGINE_SPEC.md (fields: bloomMips, reflections, glowScale, glassDispersion).
 const PRESETS: Preset[] = [
-  { renderScale: 0.50, hazeSteps: 12, letterSteps: 8,  reflSteps: 0,  particles: 8192,   bloomMips: 4, taa: true },
-  { renderScale: 0.60, hazeSteps: 16, letterSteps: 10, reflSteps: 4,  particles: 16384,  bloomMips: 5, taa: true },
-  { renderScale: 0.70, hazeSteps: 20, letterSteps: 12, reflSteps: 6,  particles: 32768,  bloomMips: 5, taa: true },
-  { renderScale: 0.80, hazeSteps: 24, letterSteps: 16, reflSteps: 8,  particles: 65536,  bloomMips: 6, taa: true },
-  { renderScale: 1.00, hazeSteps: 32, letterSteps: 20, reflSteps: 10, particles: 131072, bloomMips: 6, taa: true },
+  { bloomMips: 3, reflections: false, glowScale: 0.6, glassDispersion: false },
+  { bloomMips: 4, reflections: true,  glowScale: 0.8, glassDispersion: false },
+  { bloomMips: 5, reflections: true,  glowScale: 1.0, glassDispersion: true },
+  { bloomMips: 6, reflections: true,  glowScale: 1.0, glassDispersion: true },
+  { bloomMips: 6, reflections: true,  glowScale: 1.2, glassDispersion: true },
 ];
 
 const MAX_LEVEL = 4;
 const WINDOW_MIN = 10;
 
 export class QualityController {
-  /** Upper bound for particle buffer allocation. */
-  static MAX_PARTICLES = 131072;
-
   settings: QualitySettings;
 
   private level: number;
@@ -32,7 +29,7 @@ export class QualityController {
 
   constructor(tier: DeviceTier) {
     this.level = tier === 'desktop' ? 3 : tier === 'laptop' ? 2 : 1;
-    this.maxLevel = tier === 'mobile' ? 2 : MAX_LEVEL;
+    this.maxLevel = tier === 'mobile' ? 3 : MAX_LEVEL;
     this.settings = this.build(this.level);
   }
 

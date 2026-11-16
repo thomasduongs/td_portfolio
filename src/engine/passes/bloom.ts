@@ -1,4 +1,4 @@
-// Bloom chain: taa[n&1] -> downsample mips (Karis first) -> additive tent upsample back to mip0.
+// Bloom chain: hdr -> downsample mips (Karis first) -> additive tent upsample back to mip0.
 import type { Caps, EngineCtx, FrameTargets, Pass, QualitySettings, Size, TS } from '../types';
 import { FRAME_WGSL } from '../frame';
 import SRC from '../shaders/bloom.wgsl?raw';
@@ -13,13 +13,13 @@ export function bloomDesc(size: Size, q: QualitySettings, caps: Caps): GPUTextur
   };
 }
 
-interface Step { view: GPUTextureView; bg: GPUBindGroup | GPUBindGroup[]; pipe: 0 | 1 | 2 }
+interface Step { view: GPUTextureView; bg: GPUBindGroup; pipe: 0 | 1 | 2 }
 
 export class BloomPass implements Pass {
   readonly name = 'bloom';
   private pipes: GPURenderPipeline[] = []; // [down_first, down, up]
   private readonly bgl: GPUBindGroupLayout;
-  private downs: Step[] = [];  // downs[0] has bg per source parity
+  private downs: Step[] = [];
   private ups: Step[] = [];
   private ubos: GPUBuffer[] = [];
 
@@ -77,9 +77,7 @@ export class BloomPass implements Pass {
     this.downs = [];
     for (let i = 0; i < n; i++) {
       const u = ubo(dims[i][0], dims[i][1]);
-      const src = i === 0
-        ? [bg(t.taa[0].createView(), u), bg(t.taa[1].createView(), u)]
-        : bg(views[i - 1], u);
+      const src = bg(i === 0 ? t.hdr.createView() : views[i - 1], u);
       this.downs.push({ view: views[i], bg: src, pipe: i === 0 ? 0 : 1 });
     }
     // Upsample mip i+1 -> mip i, from the lowest mip upward so each level accumulates the ones below it.
@@ -90,8 +88,7 @@ export class BloomPass implements Pass {
     }
   }
 
-  encode(enc: GPUCommandEncoder, ts: TS, frameIndex: number): void {
-    const p = frameIndex & 1;
+  encode(enc: GPUCommandEncoder, ts: TS): void {
     const run = (s: Step, load: GPULoadOp, timestampWrites?: GPURenderPassTimestampWrites) => {
       const pass = enc.beginRenderPass({
         label: 'bloom',
@@ -100,7 +97,7 @@ export class BloomPass implements Pass {
       });
       pass.setPipeline(this.pipes[s.pipe]);
       pass.setBindGroup(0, this.ctx.frameBG);
-      pass.setBindGroup(1, Array.isArray(s.bg) ? s.bg[p] : s.bg);
+      pass.setBindGroup(1, s.bg);
       pass.draw(3);
       pass.end();
     };

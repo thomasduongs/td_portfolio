@@ -1,4 +1,4 @@
-// Composite: TAA output + bloom -> exposure -> AgX -> swapchain. host calls setOutput(view) each frame.
+// Composite: hdr + bloom -> exposure -> AgX -> swapchain. host calls setOutput(view) each frame.
 import type { EngineCtx, FrameTargets, Pass, QualitySettings, Size, TS } from '../types';
 import { FRAME_WGSL } from '../frame';
 import { bloomDesc } from './bloom';
@@ -8,7 +8,7 @@ export class CompositePass implements Pass {
   readonly name = 'composite';
   private pipeline!: GPURenderPipeline;
   private readonly bgl: GPUBindGroupLayout;
-  private bgs: GPUBindGroup[] = [];
+  private bg: GPUBindGroup | null = null;
   private output: GPUTextureView | null = null;
 
   constructor(private readonly ctx: EngineCtx, _context: GPUCanvasContext) {
@@ -45,19 +45,19 @@ export class CompositePass implements Pass {
     // Same descriptor as BloomPass -> same pooled texture regardless of configure order.
     const bloom = pool.texture('bloom', bloomDesc(size, q, caps));
     const bloomView = bloom.createView({ baseMipLevel: 0, mipLevelCount: 1 });
-    this.bgs = [0, 1].map((p) => device.createBindGroup({
-      label: 'composite-bg' + p,
+    this.bg = device.createBindGroup({
+      label: 'composite-bg',
       layout: this.bgl,
       entries: [
-        { binding: 0, resource: t.taa[p].createView() },
+        { binding: 0, resource: t.hdr.createView() },
         { binding: 1, resource: bloomView },
         { binding: 2, resource: linearClamp },
       ],
-    }));
+    });
   }
 
-  encode(enc: GPUCommandEncoder, ts: TS, frameIndex: number): void {
-    if (!this.output) return;
+  encode(enc: GPUCommandEncoder, ts: TS): void {
+    if (!this.output || !this.bg) return;
     const pass = enc.beginRenderPass({
       label: 'composite',
       colorAttachments: [{ view: this.output, loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }],
@@ -65,7 +65,7 @@ export class CompositePass implements Pass {
     });
     pass.setPipeline(this.pipeline);
     pass.setBindGroup(0, this.ctx.frameBG);
-    pass.setBindGroup(1, this.bgs[frameIndex & 1]);
+    pass.setBindGroup(1, this.bg);
     pass.draw(3);
     pass.end();
   }

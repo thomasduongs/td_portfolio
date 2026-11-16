@@ -38,7 +38,7 @@ fn oetf(c: vec3f) -> vec3f {
 }
 
 fn shade(pos: vec2f, toSrgb: bool) -> vec4f {
-  let uv = pos * F.outRes.zw;
+  let uv = pos * F.resolution.zw;
   var color = textureSampleLevel(hdrTex, samp, uv, 0.0).rgb;
 
   let bloom = textureSampleLevel(bloomTex, samp, uv, 0.0).rgb;

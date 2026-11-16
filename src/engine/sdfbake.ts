@@ -1,5 +1,3 @@
-import JFA_WGSL from './shaders/jfa.wgsl?raw';
-
 export interface TextRaster {
   lines: string[]; w: number; h: number; mask: Uint8Array;
   pxPerUnit: number; halfW: number; halfH: number;
@@ -79,53 +77,3 @@ export function bakeSDFCPU(r: TextRaster): Float32Array {
   return sdf;
 }
 
-export async function bakeSDFGPU(device: GPUDevice, r: TextRaster): Promise<GPUTexture> {
-  const temporary: GPUBuffer[] = [];
-  const buffer = (label: string, size: number, usage: GPUBufferUsageFlags) => {
-    const b = device.createBuffer({ label, size, usage }); temporary.push(b); return b;
-  };
-  const seeds = [0, 1].map(i => buffer(`JFA seeds ${i}`, r.w * r.h * 16, GPUBufferUsage.STORAGE));
-  const mask = buffer('Text mask', r.w * r.h * 4, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-  device.queue.writeBuffer(mask, 0, Uint32Array.from(r.mask));
-  const steps: number[] = [];
-  for (let step = 2 ** Math.ceil(Math.log2(Math.max(r.w, r.h))) / 2; step >= 1; step /= 2) steps.push(step);
-  steps.push(1);
-  const params = buffer('JFA parameters', (steps.length + 1) * 256, GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST);
-  const data = new ArrayBuffer((steps.length + 1) * 256);
-  [0, ...steps].forEach((step, i) => {
-    new Uint32Array(data, i * 256, 3).set([r.w, r.h, step]); new Float32Array(data, i * 256 + 12, 1)[0] = r.pxPerUnit;
-  });
-  device.queue.writeBuffer(params, 0, data);
-  const texture = device.createTexture({ label: 'Text SDF', size: [r.w, r.h], format: 'rgba16float',
-    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING });
-  const bgl = device.createBindGroupLayout({ entries: [
-    { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 16 } },
-    { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-    { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' } },
-    { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
-    { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: 'write-only', format: 'rgba16float' } },
-  ] });
-  const module = device.createShaderModule({ label: 'JFA', code: JFA_WGSL });
-  const layout = device.createPipelineLayout({ bindGroupLayouts: [bgl] });
-  try {
-    const [init, jump, finish] = await Promise.all(['seed', 'jump', 'finish'].map(entryPoint =>
-      device.createComputePipelineAsync({ layout, compute: { module, entryPoint } })));
-    const groups = seeds.map((_, i) => device.createBindGroup({ layout: bgl, entries: [
-      { binding: 0, resource: { buffer: params, size: 16 } }, { binding: 1, resource: { buffer: mask } },
-      { binding: 2, resource: { buffer: seeds[i] } }, { binding: 3, resource: { buffer: seeds[1 - i] } },
-      { binding: 4, resource: texture.createView() },
-    ] }));
-    const enc = device.createCommandEncoder({ label: 'Bake text SDF' });
-    const dispatch = (pipeline: GPUComputePipeline, group: number, offset: number) => {
-      const pass = enc.beginComputePass(); pass.setPipeline(pipeline); pass.setBindGroup(0, groups[group], [offset]);
-      pass.dispatchWorkgroups(Math.ceil(r.w / 8), Math.ceil(r.h / 8)); pass.end();
-    };
-    dispatch(init, 1, 0); // Seed writes buffer 0.
-    let parity = 0;
-    steps.forEach((_, i) => { dispatch(jump, parity, (i + 1) * 256); parity = 1 - parity; });
-    dispatch(finish, parity, 0);
-    device.queue.submit([enc.finish()]); await device.queue.onSubmittedWorkDone();
-    return texture;
-  } catch (error) { texture.destroy(); throw error; }
-  finally { temporary.forEach(b => b.destroy()); }
-}

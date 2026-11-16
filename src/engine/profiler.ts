@@ -107,7 +107,7 @@ export class FrameStats {
       dropped: v.filter((x) => x > 1.5 * budget).length,
       inputLatencyMs: this.lastLatency,
       level: q.level,
-      renderScale: q.renderScale,
+      renderScale: 1, // v3: everything renders at output resolution
       refreshHz: this.refreshHz,
       backend,
     };
