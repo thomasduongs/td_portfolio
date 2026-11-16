@@ -21,39 +21,37 @@ export type DeviceTier = 'desktop' | 'laptop' | 'mobile';
 /** Quality level 0 (lowest) .. 4 (highest). Produced by QualityController, consumed by passes. */
 export interface QualitySettings {
   level: number;
-  renderScale: number;      // internal scene resolution / output resolution
-  hazeSteps: number;        // coarse haze/beam march steps along the whole view ray
-  letterSteps: number;      // fine march steps inside the letter slab (where beams intersect)
-  reflSteps: number;        // floor reflection steps through the letter slab (0 = off)
-  particles: number;        // active particle count (multiple of 256)
-  bloomMips: number;        // 4..6
-  taa: boolean;
+  bloomMips: number;        // 3..6
+  reflections: boolean;     // floor mirror-image of the beams
+  glowScale: number;        // multiplies beamStyle glow width (cheap halo vs wide halo)
+  glassDispersion: boolean; // glass pass samples R/G/B separately (3 taps) vs 1 tap
 }
 
-/** Output and internal render sizes in device pixels. */
-export interface Size {
-  outW: number; outH: number;   // swapchain / TAA output
-  inW: number; inH: number;     // internal scene resolution = round(out * renderScale)
-}
+/** Output size in device pixels. Everything renders at output resolution (lines are analytically AA'd). */
+export interface Size { outW: number; outH: number }
 
-/** Shared per-frame textures. Owned by the worker (via ResourcePool), read/written by passes. */
+/** Shared per-frame textures (owned by host via ResourcePool). */
 export interface FrameTargets {
-  sceneColor: GPUTexture;   // hdrFormat, internal size. Written: ScenePass (clear), ParticlePass (load, additive)
-  sceneDepth: GPUTexture;   // depth32float, internal size. Written: ScenePass (frag_depth), read: Particles(test), Composite(fog)
-  taa: [GPUTexture, GPUTexture]; // hdrFormat, output size. Frame n: TAA writes taa[n&1], reads history taa[(n+1)&1]; Bloom+Composite read taa[n&1]
+  hdr: GPUTexture;      // hdrFormat, output size. LaserPass clears+draws; GlassPass loads+draws; Bloom+Composite read.
+  hdrCopy: GPUTexture;  // copy of hdr after beams, before glass (GlassPass samples it for screen-space refraction)
+}
+
+/** GPU buffers of the optics scene (storage, read-only). Replaced when the text layout changes; host then calls configure(). */
+export interface OpticsBuffers {
+  segments: GPUBuffer; mirrors: GPUBuffer; glass: GPUBuffer;
+  numSegments: number; numMirrors: number; numGlass: number;
 }
 
 /** Context every pass receives in its constructor. */
 export interface EngineCtx {
   device: GPUDevice;
   caps: Caps;
-  frameUBO: GPUBuffer;         // FRAME_UBO_SIZE bytes, layout in frame.ts / frame.wgsl
-  frameBGL: GPUBindGroupLayout;// @group(0) layout shared by ALL pipelines (explicit pipeline layouts: [frameBGL, passBGL...])
-  frameBG: GPUBindGroup;       // set once per pass encoder at group 0
-  sdfView: GPUTextureView;     // rgba16float 2D text SDF, .r = signed distance in WORLD units (negative inside)
-  noiseView: GPUTextureView;   // rgba8unorm 3D 64^3 tileable fbm noise (haze density), sample with a REPEAT sampler
+  frameUBO: GPUBuffer;
+  frameBGL: GPUBindGroupLayout; // @group(0) shared by all pipelines
+  frameBG: GPUBindGroup;
   linearClamp: GPUSampler;
   pool: ResourcePoolLike;
+  optics: OpticsBuffers;        // mutable: host swaps buffers on re-layout, then calls configure()
 }
 
 export interface ResourcePoolLike {
@@ -78,7 +76,7 @@ export interface Pass {
 export type MainToWorker =
   | { type: 'init'; canvas: OffscreenCanvas | HTMLCanvasElement; width: number; height: number; dpr: number; tier: DeviceTier; bench: string | null; reducedMotion: boolean; forceWebGL2?: boolean; forceLevel?: number }
   | { type: 'resize'; width: number; height: number; dpr: number }
-  | { type: 'pointer'; x: number; y: number; down: boolean; click: boolean; t: number } // x,y in [0,1] top-left origin; t = performance.timeOrigin + event.timeStamp
+  | { type: 'pointer'; x: number; y: number; down: boolean; click: boolean; t: number } // click = send a light pulse // x,y in [0,1] top-left origin; t = performance.timeOrigin + event.timeStamp
   | { type: 'visibility'; hidden: boolean };
 
 export interface Stats {

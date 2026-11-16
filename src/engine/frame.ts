@@ -1,24 +1,14 @@
-// CPU mirror of shaders/frame.wgsl. One Float32Array, written in place every frame, uploaded with a
-// single queue.writeBuffer (656 B) -> no per-frame allocation.
+// CPU mirror of shaders/frame.wgsl (v3). One Float32Array, written in place, one writeBuffer per frame.
 import FRAME_WGSL_SRC from './shaders/frame.wgsl?raw';
-import BEAMS_WGSL_SRC from './shaders/beams.wgsl?raw';
 
 export const FRAME_WGSL: string = FRAME_WGSL_SRC;
-/** Beam library; consumers compile FRAME_WGSL + BEAMS_WGSL + source and declare `sdfTex` + `samp`. */
-export const BEAMS_WGSL: string = BEAMS_WGSL_SRC;
-export const FRAME_UBO_SIZE = 800;
-export const MAX_MARBLES = 16;
-export const NUM_BEAMS = 3;
+export const FRAME_UBO_SIZE = 304;
 
 // float offsets (byte offset / 4)
 export const O = {
-  viewProj: 0, invViewProj: 16, prevViewProj: 32,
-  camPos: 48, resolution: 52, outRes: 56, jitter: 60, time: 64, pointer: 68,
-  textParams: 72, quality: 76, misc: 80, beamParams: 84,
-  beams: 88,   // + 16 * j : pos +0, dir +4, color +8, align +12
-  marbles: 136,
+  viewProj: 0, invViewProj: 16, view: 32,
+  camPos: 48, resolution: 52, time: 56, pointer: 60, misc: 64, beamStyle: 68, counts: 72,
 } as const;
-export const BEAM_STRIDE = 16;
 
 export class FrameData {
   readonly f32 = new Float32Array(FRAME_UBO_SIZE / 4);
@@ -29,7 +19,7 @@ export class FrameData {
   upload(queue: GPUQueue, buf: GPUBuffer): void { queue.writeBuffer(buf, 0, this.f32); }
 }
 
-/** Create the bind group layout used as @group(0) by every pipeline. */
+/** Bind group layout used as @group(0) by every pipeline. */
 export function frameBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
   return device.createBindGroupLayout({
     label: 'frame-bgl',

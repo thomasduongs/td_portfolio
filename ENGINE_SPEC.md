@@ -1,3 +1,67 @@
+# v3 — Laser optics (CURRENT; supersedes v2 and v1 below)
+
+The name is **outlined by crisp laser beams**. No haze, no fog, no particles, no marbles, no TAA.
+White lasers enter from the page edges, refract through **glass prisms** (Snell's law; a faint
+dispersion fan), bounce off **router mirrors** into each letter, and circulate around each glyph outline
+via a tiny **mirror at every outline vertex** (normal = bisector, so the reflection lands exactly on the
+next edge). When a loop closes, reflection off its entry splitter determines the exit ray; a router
+mirror placed on that ray sends the beam to the next glyph. Each word's chain ends through a **glass box**
+(parallel faces → lateral shift) and leaves the frame. All routing is computed exactly on the CPU.
+
+Contracts (lead-owned): `shaders/frame.wgsl` (v3, 304 B + `Segment`/`Mirror`/`Glass` structs),
+`frame.ts`, `types.ts` (QualitySettings v3, `Size {outW,outH}`, `FrameTargets {hdr,hdrCopy}`,
+`EngineCtx.optics`), `optics/types.ts` (scene types + `packOptics`), `optics/route.ts` (lead), `host.ts` (lead).
+
+Pass order (one command buffer): **LaserPass** (clear `hdr`; mirrors, beams, floor reflection, glints)
+→ copy `hdr`→`hdrCopy` (host) → **GlassPass** (load `hdr`; glass objects refract `hdrCopy`) → **Bloom**
+(reads `hdr`) → **Composite** (reads `hdr` + bloom). Everything at output resolution.
+
+## v3 tasks
+
+### contours.ts (src/engine/optics/contours.ts) — `export function extractGlyphs(r: TextRaster): Glyph[]`
+- Input: `TextRaster` (mask rows bottom→top; pixel (c,row) at x=(c+.5)/pxPerUnit−halfW, y=(row+.5)/pxPerUnit−halfH).
+- Marching squares on the mask (threshold 127, use the full-res mask; linear interpolation is not needed for a binary mask — use cell edge midpoints) → closed polylines. Remove degenerate/tiny loops (perimeter < 0.3).
+- Douglas–Peucker simplify, tolerance 0.012 world; then merge vertices closer than 0.045; cap at 28 vertices per loop (raise tolerance until it fits). Keep corners sharp (DP does).
+- Offset each vertex outward by 0.025 along the averaged edge normal (outer loops grow, holes shrink) so beams sit just outside the ink.
+- Orientation: outer loops CCW, holes CW (signed area). Classify holes = loops contained in another loop (point-in-polygon of first vertex).
+- Group into glyphs: each outer loop + the holes inside it. Order glyphs by line (top line first; line = round of loop centre y relative to line spacing 1.45 — simpler: sort by maxY descending in bands of 0.7, then minX ascending). Within a glyph: outer first, then holes ordered by minX.
+- Rotate each loop so `pts[0]` is the topmost vertex (max y; ties → min x).
+- `line` = 0-based line index. Fill min/max.
+- Node-testable: export also `simplifyDP(pts, tol)`; add a small self-check script `scripts/test-contours.mjs` is NOT required.
+
+### laser pass (src/engine/passes/lasers.ts + shaders/lasers.wgsl) — `class LaserPass implements Pass` name `'lasers'`
+- Group 1: segments (read-only storage `array<Segment>`), mirrors (`array<Mirror>`), optional nothing else.
+- **Beams**: instanced quad per segment, `draw(6, nSeg * (reflections ? 2 : 1))`. Instances ≥ nSeg are the floor reflection: mirror world y about `F.beamStyle.w` (y' = 2·floorY − y), gain `F.counts.w`, and fade with distance below the floor (`exp(-(floorY − y')·1.2)`), and discard fragments whose world y' > floorY (only below the floor line). VS: project a and b to clip; if either is behind the camera clip it; expand in **screen space** perpendicular to the segment by `halfWidth = glowWidthPx·glowScale + 2` px (pass endpoints in px to FS). Round caps: extend along the segment by halfWidth too.
+- FS: d = pixel distance to the 2D segment (px). s = arc length at the closest point (lerp sA→sB). Intensity
+  `core = exp(-(d/coreWidthPx)^2 * 1.0)`, `glow = glowGain * exp(-d/(glowWidthPx·glowScale))`, `I = core*2.2 + glow`.
+  Reveal: `if s > reveal: discard`; head flare: `+ 6·exp(-((reveal−s)/0.08)^2)` while reveal < pathLength(+1).
+  Pulse: if `misc.w ≥ 0`: `I *= 1 + 5·exp(-((s − misc.w)/0.25)^2)`.
+  Shimmer near pointer: `I *= 1 + 0.6·pointer.w·exp(-dist2D_world(pointer, closest point)/0.25)` (use world-space closest point).
+  Kind 1 (inside glass): ×0.55. Kind 2 (dispersion): × (1 − t_along)², colour as given.
+  Out: `vec4(color·I, 0)`, additive blend (one, one). No depth.
+- **Mirrors**: instanced oriented quad per mirror (drawn BEFORE beams, alpha blend), plane spanned by two tangents of `normal`, size `halfSize`. Shade: very dark glass-metal body `vec3(0.02)` alpha 0.9, plus a thin bright rim (edge 8%) and a specular term toward the camera from the arriving beam colour. Mirrors only appear once revealed (`reveal ≥ sArrive − 0.2`, fade in).
+- **Glints**: instanced screen-aligned star sprite at each mirror centre (additive): 4-point star (two thin gaussians along x/y in px + small core), size 10–18 px scaled by `halfSize`, colour = mirror colour × 1.5, only when revealed; twinkle `0.8 + 0.2·sin(t·3 + i)`; pulse boost like beams using `sArrive`.
+- Sources: host passes nothing; emitters are drawn as a segment's start flare: at segments with sA == 0 add a bright point (handled by head flare logic is fine: add `+ 3·exp(-(s/0.05)^2)`).
+- `configure`: bind group from `ctx.optics` buffers; `encode`: render pass on `targets.hdr` (loadOp clear black), 3 draws.
+
+### glass pass (src/engine/passes/glass.ts + shaders/glass.wgsl) — `class GlassPass` name `'glass'`
+- Group 1: glass storage `array<Glass>`, `hdrCopy` texture, linear sampler.
+- One instanced draw: per glass object a screen-space bounding quad (project the 8 corners of its OBB, take min/max in NDC → 6 vertices). FS: build view ray (`rayDir`), intersect the analytic object in local space (box: slab test; prism: intersection of 3 side planes of an equilateral triangle with circumradius `ax.w` in local XY + the two Z caps) → entry t, normal; exit point (second intersection) & normal. Discard on miss.
+- Shading: Fresnel (Schlick, F0 0.04). Refraction: approximate screen-space — refracted direction through entry, then exit (Snell, IOR 1.5; TIR → reflect); project `exitPoint + outDir·1.5` to screen uv and sample `hdrCopy` there; dispersion when `q.glassDispersion`: IOR (1.47,1.50,1.53) → 3 samples, one per channel. Transmission tint vec3(0.92,0.96,1.0). Reflection: faint env `vec3(0.01)` + the brightest nearby beam is not needed.
+  Edges: bright rim where the two nearest faces meet: `edge = 1 − smoothstep(0, 0.012, minDistToEdge)` → `+ vec3(0.6,0.7,0.8)·edge·0.6` (crisp glass edges catch light). Body: very slight darkening 0.85.
+  Out: `vec4(col, 1)` with normal (replace) blending — the object fully re-renders its pixels.
+- Load `targets.hdr` (loadOp load).
+
+### cleanup (low tier)
+- **quality.ts** presets v3 (fields: bloomMips, reflections, glowScale, glassDispersion): L0 {3,false,0.6,false} L1 {4,true,0.8,false} L2 {5,true,1.0,true} L3 {6,true,1.0,true} L4 {6,true,1.2,true}. Start: desktop 3, laptop 2, mobile 1; max mobile 3. Controller logic unchanged.
+- **profiler.ts** `snapshot`: `renderScale: 1`. **bench.ts**: compile-clean.
+- **bloom.ts/composite.ts**: read `targets.hdr` instead of `taa[n&1]` (single bind group, no parity). Composite unchanged otherwise.
+- **Delete**: passes/particles.ts, passes/scene.ts, passes/taa.ts, shaders/{particles,particles-render,scene,taa,beams,noise}.wgsl, noise.ts, physics/physics.ts; remove `@dimforge/rapier3d-compat` from package.json (`npm uninstall`). `sdfbake.ts`: keep `rasterizeText` + CPU path; `bakeSDFGPU` and jfa.wgsl may be deleted.
+- **main.ts / index.html**: hint text → `move · click to send a pulse of light`.
+
+### fallback/webgl2.ts (mid)
+Same optics scene (call `extractGlyphs` + `buildOptics` from route.ts), WebGL2 instanced drawing of beams + glints with additive blending into an RGBA16F (or RGBA8 if no EXT_color_buffer_float) target, simple glass (edge rim + uniform tint, no refraction), simple bloom (one 1/4-res blur) optional, AgX tonemap. Same camera/reveal/pulse logic as host.ts.
+
 # v2 — Light-beam text (SUPERSEDES the glass-letter design below where they conflict)
 
 The name is **not geometry**. Three coloured gobo projectors (R, G, B) shine through haze; each beam
