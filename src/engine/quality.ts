@@ -3,13 +3,13 @@ import type { DeviceTier, QualitySettings } from './types';
 
 type Preset = Omit<QualitySettings, 'level'>;
 
-// Index = level. Keep in sync with the table in ENGINE_SPEC.md §2 (quality.ts).
+// Index = level. Tuned after measurement: the letter hull is ~0.07 thick inside a ±0.15 slab, so few fine steps suffice. taa everywhere.
 const PRESETS: Preset[] = [
-  { renderScale: 0.50, primarySteps: 48,  interiorSteps: 12, reflSteps: 0,  shadowSteps: 6,  dispersion: false, froxel: [80, 45, 32],  particles: 8192,   bloomMips: 4, taa: true },
-  { renderScale: 0.60, primarySteps: 64,  interiorSteps: 16, reflSteps: 24, shadowSteps: 8,  dispersion: false, froxel: [96, 54, 48],  particles: 16384,  bloomMips: 5, taa: true },
-  { renderScale: 0.75, primarySteps: 80,  interiorSteps: 20, reflSteps: 32, shadowSteps: 10, dispersion: false, froxel: [128, 72, 64], particles: 32768,  bloomMips: 5, taa: true },
-  { renderScale: 0.85, primarySteps: 96,  interiorSteps: 24, reflSteps: 40, shadowSteps: 12, dispersion: true,  froxel: [160, 90, 64], particles: 65536,  bloomMips: 6, taa: true },
-  { renderScale: 1.00, primarySteps: 128, interiorSteps: 32, reflSteps: 48, shadowSteps: 16, dispersion: true,  froxel: [160, 90, 96], particles: 131072, bloomMips: 6, taa: true },
+  { renderScale: 0.50, hazeSteps: 12, letterSteps: 8,  reflSteps: 0,  particles: 8192,   bloomMips: 4, taa: true },
+  { renderScale: 0.60, hazeSteps: 16, letterSteps: 10, reflSteps: 4,  particles: 16384,  bloomMips: 5, taa: true },
+  { renderScale: 0.70, hazeSteps: 20, letterSteps: 12, reflSteps: 6,  particles: 32768,  bloomMips: 5, taa: true },
+  { renderScale: 0.80, hazeSteps: 24, letterSteps: 16, reflSteps: 8,  particles: 65536,  bloomMips: 6, taa: true },
+  { renderScale: 1.00, hazeSteps: 32, letterSteps: 20, reflSteps: 10, particles: 131072, bloomMips: 6, taa: true },
 ];
 
 const MAX_LEVEL = 4;

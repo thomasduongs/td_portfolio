@@ -2,7 +2,7 @@
 // transferControlToOffscreen is unavailable, on the main thread with an HTMLCanvasElement.
 // The DOM never touches this code path except via postMessage-shaped messages.
 import type { MainToWorker, WorkerToMain, EngineCtx, FrameTargets, Pass, Size, QualitySettings } from './types';
-import { FrameData, FRAME_UBO_SIZE, O, frameBindGroupLayout } from './frame';
+import { FrameData, FRAME_UBO_SIZE, O, BEAM_STRIDE, NUM_BEAMS, frameBindGroupLayout } from './frame';
 import { m4, perspective, lookAt, mul, invert, halton } from './math';
 import { initDevice } from './device';
 import { ResourcePool } from './resources';
@@ -11,7 +11,7 @@ import { QualityController } from './quality';
 import { BenchRunner } from './bench';
 import { rasterizeText, bakeSDFGPU, type TextRaster } from './sdfbake';
 import { ParticlePass } from './passes/particles';
-import { VolumetricPass } from './passes/volumetric';
+import { bakeNoise } from './noise';
 import { ScenePass } from './passes/scene';
 import { TaaPass } from './passes/taa';
 import { BloomPass } from './passes/bloom';
@@ -23,6 +23,13 @@ type InitMsg = Extract<MainToWorker, { type: 'init' }>;
 
 const FOV_Y = (32 * Math.PI) / 180;
 const PHYS_DT = 1 / 120;
+
+// Projector rig: rest position, orbit amplitude, orbit speed, scatter radiance (rgb), intro scatter offset.
+const RIG = [
+  { pos: [-7.5, 4.0, -4.5], orbit: [0.9, 0.8, 1.0], freq: 0.19, color: [9.0, 1.1, 0.55], scatter: [-1.4, 0.5] },
+  { pos: [7.5, 4.0, -4.5], orbit: [0.9, 0.8, 1.0], freq: 0.17, color: [0.8, 8.0, 1.6], scatter: [1.3, -0.6] },
+  { pos: [0.0, 7.6, -5.5], orbit: [1.8, 0.6, 0.8], freq: 0.13, color: [1.2, 3.2, 11.0], scatter: [0.2, 1.2] },
+] as const;
 const MAX_OUT_PIXELS = 3_700_000; // ~2560x1440: beyond this, TAA upsampling + CSS scaling is cheaper than native.
 
 export function createHost(post: Post): (msg: MainToWorker) => void {
@@ -69,6 +76,7 @@ class Engine {
   private lastT = 0; private time = 0; private physAcc = 0;
   private pointer = { x: 0.5, y: 0.5, down: false, intensity: 0, lastMove: -1e9, pendingT: 0 };
   private clicks: number[][] = [];
+  private agitation = 0;
   private proj = m4(); private view = m4(); private vp = m4(); private vpJ = m4(); private inv = m4(); private prevVP = m4(); private jm = m4();
   private eye = [0, 0.5, 8]; private parallax = [0, 0];
   private stats = new FrameStats();
@@ -107,17 +115,19 @@ class Engine {
     const linearClamp = d.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge', addressModeW: 'clamp-to-edge' });
 
     this.raster = rasterizeText(this.lines());
-    this.sdfTex = await bakeSDFGPU(d, this.raster);
-    this.ctx = { device: d, caps, frameUBO, frameBGL, frameBG, sdfView: this.sdfTex.createView(), linearClamp, pool: this.pool };
+    const [sdfTex, noiseTex] = await Promise.all([bakeSDFGPU(d, this.raster), bakeNoise(d)]);
+    this.sdfTex = sdfTex;
+    this.ctx = { device: d, caps, frameUBO, frameBGL, frameBG, sdfView: sdfTex.createView(), noiseView: noiseTex.createView({ dimension: '3d' }), linearClamp, pool: this.pool };
 
     this.composite = new CompositePass(this.ctx, this.gpu.context);
     const particles = new ParticlePass(this.ctx), scene = new ScenePass(this.ctx);
     scene.setOverlay(particles); // particle draw is recorded right after the scene render pass (needs scene depth)
     this.passes = [
-      particles, new VolumetricPass(this.ctx), scene,
+      particles, scene,
       new TaaPass(this.ctx), new BloomPass(this.ctx), this.composite,
     ];
     await Promise.all(this.passes.map((p) => p.init()));
+    if (this.init.forceLevel !== undefined) this.qc.force(this.init.forceLevel);
     this.q = this.qc.settings;
     this.reconfigure();
     this.loop();
@@ -140,7 +150,10 @@ class Engine {
       }
       case 'pointer': {
         const p = this.pointer;
-        if (Math.abs(m.x - p.x) + Math.abs(m.y - p.y) > 1e-4) p.lastMove = this.time;
+        const moved = Math.hypot(m.x - p.x, m.y - p.y);
+        if (moved > 1e-4) p.lastMove = this.time;
+        // Fast pointer motion knocks the projectors out of alignment; the letters split into RGB ghosts.
+        this.agitation = Math.min(1.6, this.agitation + moved * 3.5);
         p.x = m.x; p.y = m.y; p.down = m.down; p.pendingT = m.t;
         if (m.click) this.clicks.push([m.x, m.y]);
         break;
@@ -178,7 +191,6 @@ class Engine {
         P.texture('taa0', { size: [sz.outW, sz.outH], format: caps.hdrFormat, usage: RA | TB | ST }),
         P.texture('taa1', { size: [sz.outW, sz.outH], format: caps.hdrFormat, usage: RA | TB | ST }),
       ],
-      froxelIntegrated: P.texture('froxelInt', { size: this.q.froxel, dimension: '3d', format: 'rgba16float', usage: TB | ST }),
     };
     for (const p of this.passes) p.configure(this.size, this.q, this.targets);
   }
@@ -201,7 +213,7 @@ class Engine {
     this.time += this.init.reducedMotion ? dt * 0.25 : dt;
 
     // ---- adaptive quality (decided on CPU from last-known GPU timings; never stalls) ----
-    const changed = this.bench ? this.bench.onFrame(now, this.stats, this.prof) : this.qc.update(this.stats.lastInterval, this.prof.gpuMs, this.stats.refreshHz);
+    const changed = this.init.forceLevel !== undefined ? false : this.bench ? this.bench.onFrame(now, this.stats, this.prof) : this.qc.update(this.stats.lastInterval, this.prof.gpuMs, this.stats.refreshHz);
     if (changed) { this.q = this.qc.settings; this.reconfigure(); }
 
     this.updateCamera();
@@ -228,15 +240,11 @@ class Engine {
     F.set4(O.outRes, sz.outW, sz.outH, 1 / sz.outW, 1 / sz.outH);
     F.set4(O.time, t, dt, this.frameIndex, q.level);
     F.set4(O.pointer, ray.light[0], ray.light[1], ray.light[2], p.intensity * 6);
-    const sx = 3.2 * Math.sin(t * 0.11), sp = [sx, 3.6, -5.2], tg = [-sx * 0.25, r.floorY, 2.5];
-    const dl = Math.hypot(tg[0] - sp[0], tg[1] - sp[1], tg[2] - sp[2]);
-    F.set4(O.spotPos, sp[0], sp[1], sp[2], Math.cos((26 * Math.PI) / 180));
-    F.set4(O.spotDir, (tg[0] - sp[0]) / dl, (tg[1] - sp[1]) / dl, (tg[2] - sp[2]) / dl, Math.cos((15 * Math.PI) / 180));
-    F.set4(O.spotColor, 1.0 * 90, 0.9 * 90, 0.78 * 90, r.floorY);
-    F.set4(O.textParams, r.halfW, r.halfH, 0.16, 0.035);
-    F.set4(O.quality, q.primarySteps, q.interiorSteps, q.reflSteps, q.shadowSteps);
-    F.set4(O.froxel, q.froxel[0], q.froxel[1], q.froxel[2], this.eye[2] + 14); // fog volume always reaches past the text
-    F.set4(O.misc, 1.0, 0.05, 0.035, count);
+    this.writeBeams(t, dt);
+    F.set4(O.textParams, r.halfW, r.halfH, r.floorY, 0.01);
+    F.set4(O.quality, q.hazeSteps, q.letterSteps, q.reflSteps, this.eye[2] + 16);
+    F.set4(O.misc, 1.0, 0.06, 0.05, count);
+    F.set4(O.beamParams, 0.06, 14.0, 0.15, 0.14); // slab ±0.15: past this, letters of different beams falsely coincide
     F.upload(this.device.queue, this.ctx.frameUBO);
 
     // ---- encode: one command buffer, one submit ----
@@ -258,6 +266,35 @@ class Engine {
     if (now - this.statsTimer > 250) {
       this.statsTimer = now;
       this.post({ type: 'stats', stats: this.stats.snapshot(this.prof, this.q, 'webgpu') });
+    }
+  }
+
+  /**
+   * Three gobo projectors (R, G, B). Their silhouettes coincide only on the plane z = 0, so the letters
+   * exist only where all three beams cross. Lamps orbit slowly (streaks swing, letters stay formed);
+   * misalignment (intro convergence + pointer agitation) shifts each gobo so the letters split apart.
+   */
+  private writeBeams(t: number, dt: number) {
+    const F = this.frame, r = this.raster, still = this.init.reducedMotion;
+    this.agitation *= Math.exp(-dt * 2.2);
+    // Intro: beams start scattered and spring into alignment over ~3 s.
+    const intro = still ? 0 : Math.exp(-1.35 * t) * Math.cos(2.1 * t);
+    const reach = Math.hypot(r.glyphHalfW, r.glyphHalfH) * 1.12;
+    for (let j = 0; j < NUM_BEAMS; j++) {
+      const rig = RIG[j], o = O.beams + j * BEAM_STRIDE;
+      const w = still ? 0 : 1;
+      const px = rig.pos[0] + w * rig.orbit[0] * Math.sin(t * rig.freq + j * 2.1);
+      const py = rig.pos[1] + w * rig.orbit[1] * Math.sin(t * rig.freq * 1.3 + j);
+      const pz = rig.pos[2] + w * rig.orbit[2] * Math.cos(t * rig.freq * 0.8 + j * 1.7);
+      const d0 = Math.hypot(px, py, pz);
+      const outer = Math.atan(reach / d0) + (3 * Math.PI) / 180, inner = outer - (4 * Math.PI) / 180;
+      F.set4(o, px, py, pz, Math.cos(outer));
+      F.set4(o + 4, -px / d0, -py / d0, -pz / d0, Math.cos(inner));
+      F.set4(o + 8, rig.color[0], rig.color[1], rig.color[2], 0.06);
+      const ang = t * 0.9 + j * 2.094;
+      const ax = rig.scatter[0] * intro + Math.cos(ang) * this.agitation * 0.35;
+      const ay = rig.scatter[1] * intro + Math.sin(ang) * this.agitation * 0.35;
+      F.set4(o + 12, ax, ay, 0, d0 * d0);
     }
   }
 

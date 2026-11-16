@@ -75,7 +75,7 @@ function wireInput(): void {
 
 async function start(): Promise<void> {
   const r = canvas.getBoundingClientRect();
-  const common = { width: r.width, height: r.height, dpr: devicePixelRatio, tier: detectTier(), bench, reducedMotion, forceWebGL2: params.get('backend') === 'webgl2' };
+  const common = { width: r.width, height: r.height, dpr: devicePixelRatio, tier: detectTier(), bench, reducedMotion, forceWebGL2: params.get('backend') === 'webgl2', forceLevel: params.has('q') ? Math.max(0, Math.min(4, Number(params.get('q')) | 0)) : undefined };
 
   // Preferred: engine in a render worker with the canvas transferred off the main thread.
   if ('transferControlToOffscreen' in canvas && typeof Worker !== 'undefined') {
