@@ -79,7 +79,7 @@ export interface Pass {
 
 // ---------- worker <-> main thread messages ----------
 export type MainToWorker =
-  | { type: 'init'; canvas: OffscreenCanvas | HTMLCanvasElement; width: number; height: number; dpr: number; tier: DeviceTier; bench: string | null; reducedMotion: boolean }
+  | { type: 'init'; canvas: OffscreenCanvas | HTMLCanvasElement; width: number; height: number; dpr: number; tier: DeviceTier; bench: string | null; reducedMotion: boolean; forceWebGL2?: boolean }
   | { type: 'resize'; width: number; height: number; dpr: number }
   | { type: 'pointer'; x: number; y: number; down: boolean; click: boolean; t: number } // x,y in [0,1] top-left origin; t = performance.timeOrigin + event.timeStamp
   | { type: 'visibility'; hidden: boolean };

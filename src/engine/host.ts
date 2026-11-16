@@ -16,7 +16,7 @@ import { ScenePass } from './passes/scene';
 import { TaaPass } from './passes/taa';
 import { BloomPass } from './passes/bloom';
 import { CompositePass } from './passes/composite';
-import { Physics } from '../physics/physics';
+import type { Physics } from '../physics/physics'; // lazy-loaded: Rapier WASM (~2 MB) must not block first frame
 
 type Post = (m: WorkerToMain) => void;
 type InitMsg = Extract<MainToWorker, { type: 'init' }>;
@@ -41,7 +41,7 @@ export function createHost(post: Post): (msg: MainToWorker) => void {
   };
 
   async function start(init: InitMsg) {
-    const gpu = await initDevice(init.canvas, init.tier).catch(() => null);
+    const gpu = init.forceWebGL2 ? null : await initDevice(init.canvas, init.tier).catch(() => null);
     if (gpu) {
       engine = await Engine.create(gpu, init, post);
       for (const m of queued) engine.handle(m);
@@ -86,7 +86,7 @@ class Engine {
   private pool: ResourcePool;
   private prof: GpuProfiler;
   private qc: QualityController;
-  private physics!: Physics;
+  private physics: Physics | null = null;
   private raster!: TextRaster;
   private sdfTex: GPUTexture | null = null;
 
@@ -117,11 +117,15 @@ class Engine {
       particles, new VolumetricPass(this.ctx), scene,
       new TaaPass(this.ctx), new BloomPass(this.ctx), this.composite,
     ];
-    const [physics] = await Promise.all([Physics.create(this.raster), ...this.passes.map((p) => p.init())]);
-    this.physics = physics;
+    await Promise.all(this.passes.map((p) => p.init()));
     this.q = this.qc.settings;
     this.reconfigure();
     this.loop();
+    // Physics streams in after the first frames are on screen; clicks before then stay queued.
+    import('../physics/physics')
+      .then((m) => m.Physics.create(this.raster))
+      .then((ph) => { this.physics = ph; ph.rebuildText(this.raster); })
+      .catch((e) => console.warn('physics unavailable', e));
   }
 
   private lines(): string[] { return this.cssW / this.cssH < 0.9 ? ['THOMAS', 'DUONG'] : ['THOMAS DUONG']; }
@@ -150,7 +154,7 @@ class Engine {
     const old = this.sdfTex;
     this.sdfTex = await bakeSDFGPU(this.device, this.raster);
     this.ctx.sdfView = this.sdfTex.createView();
-    this.physics.rebuildText(this.raster);
+    this.physics?.rebuildText(this.raster);
     this.reconfigure();
     old?.destroy();
   }
@@ -204,12 +208,15 @@ class Engine {
     const ray = this.pointerRay();
 
     // ---- physics: fixed 120 Hz with render interpolation ----
-    for (const c of this.clicks) this.physics.spawn(this.unproject(c[0], c[1]), this.eye);
-    this.clicks.length = 0;
-    this.physAcc += dt;
-    const p = this.pointer;
-    while (this.physAcc >= PHYS_DT) { this.physics.step(PHYS_DT, ray); this.physAcc -= PHYS_DT; }
-    const count = this.physics.writeMarbles(this.frame.f32, O.marbles, this.physAcc / PHYS_DT);
+    const p = this.pointer, ph = this.physics;
+    let count = 0;
+    if (ph) {
+      for (const c of this.clicks) ph.spawn(this.unproject(c[0], c[1]), this.eye);
+      this.clicks.length = 0;
+      this.physAcc += dt;
+      while (this.physAcc >= PHYS_DT) { ph.step(PHYS_DT, ray); this.physAcc -= PHYS_DT; }
+      count = ph.writeMarbles(this.frame.f32, O.marbles, this.physAcc / PHYS_DT);
+    }
 
     // ---- frame uniforms ----
     const F = this.frame, sz = this.size, q = this.q, r = this.raster;
@@ -228,7 +235,7 @@ class Engine {
     F.set4(O.spotColor, 1.0 * 90, 0.9 * 90, 0.78 * 90, r.floorY);
     F.set4(O.textParams, r.halfW, r.halfH, 0.16, 0.035);
     F.set4(O.quality, q.primarySteps, q.interiorSteps, q.reflSteps, q.shadowSteps);
-    F.set4(O.froxel, q.froxel[0], q.froxel[1], q.froxel[2], 22);
+    F.set4(O.froxel, q.froxel[0], q.froxel[1], q.froxel[2], this.eye[2] + 14); // fog volume always reaches past the text
     F.set4(O.misc, 1.0, 0.05, 0.035, count);
     F.upload(this.device.queue, this.ctx.frameUBO);
 
@@ -264,7 +271,7 @@ class Engine {
     this.eye[0] = this.parallax[0] * dist * 0.08;
     this.eye[1] = 0.35 + r.glyphHalfH * 0.2 - this.parallax[1] * dist * 0.04;
     this.eye[2] = dist;
-    perspective(this.proj, FOV_Y, aspect, 0.1, 40);
+    perspective(this.proj, FOV_Y, aspect, 0.1, dist + 30);
     lookAt(this.view, this.eye, [0, 0.05, 0], [0, 1, 0]);
     mul(this.vp, this.proj, this.view);
     // Sub-pixel jitter (Halton 2,3; 8-cycle) in NDC at INTERNAL resolution.
